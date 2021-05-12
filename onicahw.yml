@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ""
+Parameters:
+  LatestAmiId:
+    Description: Region specific image from the Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  InstanceType:
+    Description: Web Server EC2 Instance type
+    Type: String
+    Default: t2.nano
+    AllowedValues:
+      - t4g.nano  # $0.0042	2	0.5 GiB 	EBS Only	Up to 5 Gigabit     Arm-based AWS Graviton2 processor
+      - t3a.nano  # $0.0047	2	0.5 GiB	    EBS Only	Up to 5 Gigabit     Same as T3, but with AMD EPYC CPU
+      - t3.nano   # $0.0052	2	0.5 GiB	    EBS Only	Up to 5 Gigabit     Normal burstable general-purpose T3
+      - t2.nano   # $0.0058	1	0.5 GiB	    EBS Only	Low                 Older burstable general-purpose T2
+      - t4g.micro # $0.0084	2	1 GiB	    EBS Only	Up to 5 Gigabit     Arm-based AWS Graviton2 processor
+      - t3a.micro # $0.0094	2	1 GiB	    EBS Only	Up to 5 Gigabit     Same as T3, but with AMD EPYC CPU
+      - t3.micro  # $0.0104	2	1 GiB	    EBS Only	Up to 5 Gigabit     Normal burstable general-purpose T3
+      - t2.micro  # $0.0116	1	1 GiB	    EBS Only	Low to Moderate     Older burstable general-purpose T2
+      - t4g.small # $0.0168	2	2 GiB	    EBS Only	Up to 5 Gigabit     Arm-based AWS Graviton2 processor
+      - t3a.small # $0.0188	2	2 GiB	    EBS Only	Up to 5 Gigabit     Same as T3, but with AMD EPYC CPU
+      - t3.small  # $0.0208	2	2 GiB	    EBS Only	Up to 5 Gigabit     Normal burstable general-purpose T3
+      - t2.small  # $0.023	1	2 GiB	    EBS Only	Low to Moderate     Older burstable general-purpose T2
+    ConstraintDescription: Must be a valid EC2 instance type! Limited to cheap Instances for the purposes of this homework assignment.
+  OperatorEmail:
+    Description: Who to notify if a scaling operation occurs.
+    Type: String
+    AllowedPattern: "^[\\x20-\\x45]?[\\w-\\+]+(\\.[\\w]+)*@[\\w-]+(\\.[\\w]+)*(\\.[a-z]{2,})$"
+    ConstraintDescription: Generic email regex to ensure the email address is sane
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.10.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        !Ref VPC
+      CidrBlock: 10.10.3.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref AWS::Region
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        !Ref VPC
+      CidrBlock: 10.10.4.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref AWS::Region
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        !Ref VPC
+      CidrBlock: 10.10.1.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref AWS::Region
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        !Ref VPC
+      CidrBlock: 10.10.2.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref AWS::Region
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  NATPublicIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPC
+    Properties:
+      Domain: vpc
+
+  PrivateNATGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: NATPublicIP
+    Properties:
+      AllocationId: !GetAtt NATPublicIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref PrivateNATGateway
+
+  PrivateRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref 'OperatorEmail'
+          Protocol: email
+
+  WebServerASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      LaunchConfigurationName: !Ref 'LaunchConfig'
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      NotificationConfiguration:
+        TopicARN: !Ref 'NotificationTopic'
+        NotificationTypes:
+          - autoscaling:EC2_INSTANCE_LAUNCH
+          - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+          - autoscaling:EC2_INSTANCE_TERMINATE
+          - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: '1'
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: '1'
+        MaxBatchSize: '1'
+        PauseTime: PT15M
+        WaitOnResourceSignals: 'true'
+
+
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      Comment: Install httpd (Apache2)
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              httpd: []
+          files:
+            /var/www/html/index.html:
+              content: hello world from onica.homework # Must include the server?s hostname in the ?hello world? presented to the user
+              mode: '000644'
+              owner: root
+              group: root
+            /etc/cfn/cfn-hup.conf:
+              content: !Join
+                - ''
+                - - "[main]\n"
+                  - stack=
+                  - !Ref 'AWS::StackId'
+                  - "\n"
+                  - region=
+                  - !Ref 'AWS::Region'
+                  - "\n"
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join
+                - ''
+                - - "[cfn-auto-reloader-hook]\n"
+                  - "triggers=post.update\n"
+                  - "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n"
+                  - 'action=/opt/aws/bin/cfn-init -v '
+                  - '         --stack '
+                  - !Ref 'AWS::StackName'
+                  - '         --resource LaunchConfig '
+                  - '         --region '
+                  - !Ref 'AWS::Region'
+                  - "\n"
+                  - "runas=root\n"
+          services:
+            sysvinit:
+              httpd:
+                enabled: 'true'
+                ensureRunning: 'true'
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+          commands: hostnamectl set-hostname onica.homework # Must include the server?s hostname in the ?hello world? presented to the user
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      InstanceType: !Ref 'InstanceType'
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "yum update -y aws-cfn-bootstrap\n"
+            - '/opt/aws/bin/cfn-init -v '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource LaunchConfig '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - "\n"
+            - '/opt/aws/bin/cfn-signal -e $? '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource WebServerASG '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - "\n"
+
+  S3endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: "Gateway"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
+      PolicyDocument:
+        Statement:
+        -
+          Sid: "Amazon Linux AMI Repository Access"
+          Principal: "*"
+          Action: "s3:GetObject"
+          Effect: "Allow"
+          Resource:
+            - "arn:aws:s3:::packages.*.amazonaws.com/*"
+            - "arn:aws:s3:::repo.*.amazonaws.com/*"
+            - "arn:aws:s3:::amazonlinux.*.amazonaws.com/*"
+            - "arn:aws:s3:::amazonlinux-2-repos-*/*"
+
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'WebServerASG'
+      Cooldown: '60'
+      ScalingAdjustment: '1'
+
+  WebServerScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'WebServerASG'
+      Cooldown: '60'
+      ScalingAdjustment: '-1'
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 90% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '300' # 300 seconds, aka 5 minutes
+      EvaluationPeriods: '2' # 2 periods of 5 minutes in a row (10 minutes overall)
+      Threshold: '90' # 90% CPUUtilization
+      AlarmActions:
+        - !Ref 'WebServerScaleUpPolicy'
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref 'WebServerASG'
+      ComparisonOperator: GreaterThanThreshold # > 90% 90% CPUUtilization
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 10% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '300' # 300 seconds, aka 5 minutes
+      EvaluationPeriods: '2' # 2 periods of 5 minutes in a row (10 minutes overall)
+      Threshold: '10' # 10% CPUUtilization
+      AlarmActions:
+        - !Ref 'WebServerScaleDownPolicy'
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref 'WebServerASG'
+      ComparisonOperator: LessThanThreshold # < 10% CPUUtilization
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: "internet-facing"
+      Type: "application"
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+      SecurityGroups:
+      - !Ref ALBSecurityGroup
+      IpAddressType: "ipv4"
+      LoadBalancerAttributes:
+      -
+        Key: "access_logs.s3.enabled"
+        Value: "false"
+      -
+        Key: "idle_timeout.timeout_seconds"
+        Value: "60"
+      -
+        Key: "deletion_protection.enabled"
+        Value: "false"
+      -
+        Key: "routing.http2.enabled"
+        Value: "true"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: Targets
+      TargetType: instance
+      Protocol: HTTP
+      Port: 80
+      VpcId: !Ref VPC
+
+  HTTPListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+      - TargetGroupArn: !Ref TargetGroup
+        Type: forward
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "ALB-incoming-HTTP-80"
+      VpcId: !Ref VPC
+      GroupDescription: "ALB Security group to only allow port 80 traffic"
+      SecurityGroupIngress:
+      -
+        CidrIp: "0.0.0.0/0"
+        Description: "Allow HTTP inbound over port 80"
+        FromPort: 80
+        IpProtocol: "tcp"
+        ToPort: 80
+      SecurityGroupEgress:
+      -
+        CidrIp: "0.0.0.0/0"
+        IpProtocol: "-1"
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Enable HTTP from the load balancer only
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          SourceSecurityGroupOwnerId: !Ref AWS::AccountId
+          SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId
+
+
+Outputs:
+  URL:
+    Description: The URL of the website
+    Value: !Join
+      - ''
+      - - http://
+        - !GetAtt 'ApplicationLoadBalancer.DNSName'
