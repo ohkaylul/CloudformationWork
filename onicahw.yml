@@ -10,11 +10,9 @@ Parameters:
     Type: String
     Default: t2.nano
     AllowedValues:
-      - t4g.nano  # $0.0042	2	0.5 GiB 	EBS Only	Up to 5 Gigabit     Arm-based AWS Graviton2 processor
       - t3a.nano  # $0.0047	2	0.5 GiB	    EBS Only	Up to 5 Gigabit     Same as T3, but with AMD EPYC CPU
       - t3.nano   # $0.0052	2	0.5 GiB	    EBS Only	Up to 5 Gigabit     Normal burstable general-purpose T3
       - t2.nano   # $0.0058	1	0.5 GiB	    EBS Only	Low                 Older burstable general-purpose T2
-      - t4g.micro # $0.0084	2	1 GiB	    EBS Only	Up to 5 Gigabit     Arm-based AWS Graviton2 processor
       - t3a.micro # $0.0094	2	1 GiB	    EBS Only	Up to 5 Gigabit     Same as T3, but with AMD EPYC CPU
       - t3.micro  # $0.0104	2	1 GiB	    EBS Only	Up to 5 Gigabit     Normal burstable general-purpose T3
       - t2.micro  # $0.0116	1	1 GiB	    EBS Only	Low to Moderate     Older burstable general-purpose T2
@@ -195,32 +193,32 @@ Resources:
     #     PauseTime: PT15M
     #     WaitOnResourceSignals: 'true'
 
-
-  HttpdLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateName: "HttpdLaunchTemplate"
-      LaunchTemplateData:
-        ImageId: !Ref 'LatestAmiId'
-        SecurityGroupIds:
-        - !Ref InstanceSecurityGroup
-        InstanceType: !Ref 'InstanceType'
-        UserData: !Base64 |
-          #!/bin/bash -xe
-          while ! ifconfig | grep -F "10.10." > /dev/null; do sleep 5; done
-          yum check-update -y
-          yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
-          yum install httpd -y
-          usermod -a -G apache ec2-user
-          chown -R ec2-user:apache /var/www
-          chmod 2775 /var/www && find /var/www -type d -exec chmod 2775 {} \;
-          find /var/www -type f -exec chmod 0664 {} \;
-          touch /var/www/html/index.html
-          echo "hello world from $(hostname)" > /var/www/html/index.html
-          chmod 755 /var/www/html/index.html
-          service httpd start
-          chkconfig --add httpd
-          chkconfig httpd on
+  # used for troubleshooting purposes early on. 
+  # HttpdLaunchTemplate:
+  #   Type: AWS::EC2::LaunchTemplate
+  #   Properties:
+  #     LaunchTemplateName: "HttpdLaunchTemplate"
+  #     LaunchTemplateData:
+  #       ImageId: !Ref 'LatestAmiId'
+  #       SecurityGroupIds:
+  #       - !Ref InstanceSecurityGroup
+  #       InstanceType: !Ref 'InstanceType'
+  #       UserData: !Base64 |
+  #         #!/bin/bash -xe
+  #         while ! ifconfig | grep -F "10.10." > /dev/null; do sleep 5; done
+  #         yum check-update -y
+  #         yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+  #         yum install httpd -y
+  #         usermod -a -G apache ec2-user
+  #         chown -R ec2-user:apache /var/www
+  #         chmod 2775 /var/www && find /var/www -type d -exec chmod 2775 {} \;
+  #         find /var/www -type f -exec chmod 0664 {} \;
+  #         touch /var/www/html/index.html
+  #         echo "hello world from $(hostname)" > /var/www/html/index.html
+  #         chmod 755 /var/www/html/index.html
+  #         service httpd start
+  #         chkconfig --add httpd
+  #         chkconfig httpd on
 
 
   LaunchConfig:
@@ -235,8 +233,11 @@ Resources:
       UserData: !Base64 |
           #!/bin/bash -xe
           while ! ifconfig | grep -F "10.10." > /dev/null; do sleep 5; done
-          yum check-update -y
+          sleep 10
           yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+          sleep 10
+          yum check-update -y
+          sleep 5
           yum install httpd -y
           usermod -a -G apache ec2-user
           chown -R ec2-user:apache /var/www
